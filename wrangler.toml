@@ -9,7 +9,7 @@ bucket = "./public"
 [[d1_databases]]
 binding = "DB"
 database_name = "pharma-consult-db"
-database_id   = "YOUR_D1_DATABASE_ID"
+database_id = "f45af60d-fc9f-4037-8b1e-14cda343b205"
 
 [vars]
 ENVIRONMENT = "production"
