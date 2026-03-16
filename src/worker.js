@@ -76,8 +76,9 @@ export default {
       if (path.startsWith("/api/consultations/") && req.method === "PUT") return updateConsultation(req, env);
 
       // Messages
-      if (path.match(/^\/api\/consultations\/\d+\/messages$/) && req.method === "GET") return getMessages(req, env);
-      if (path.match(/^\/api\/consultations\/\d+\/messages$/) && req.method === "POST") return sendMessage(req, env);
+      if (path.startsWith("/api/consultations/") && path.endsWith("/messages") && req.method === "GET") return getMessages(req, env);
+
+      if (path.startsWith("/api/consultations/") && path.endsWith("/messages") && req.method === "POST") return sendMessage(req, env);
 
       // Drug search
       if (path === "/api/drugs" && req.method === "GET") return searchDrugs(req, env);
@@ -318,10 +319,17 @@ async function updateConsultation(req, env) {
 // ============================================================
 // MESSAGES
 // ============================================================
+
+
+
 async function getMessages(req, env) {
   const u = authUser(req);
   if (!u) return err("Unauthorized", 401);
-  const id = parseInt(req.url.split("/api/consultations/")[1]);
+  
+  // Extract ID from /api/consultations/123/messages
+  const parts = req.url.split("/");
+  const id = parseInt(parts[parts.indexOf("consultations") + 1]);
+  
   const { results } = await env.DB.prepare(
     `SELECT m.*, u.name as sender_name, u.name_ar as sender_name_ar, u.role as sender_role
      FROM messages m LEFT JOIN users u ON m.sender_id=u.id
@@ -330,10 +338,17 @@ async function getMessages(req, env) {
   return json(results);
 }
 
+
 async function sendMessage(req, env) {
   const u = authUser(req);
   if (!u) return err("Unauthorized", 401);
-  const id = parseInt(req.url.split("/api/consultations/")[1]);
+  
+  // Extract ID from /api/consultations/123/messages
+  const parts = req.url.split("/");
+  const id = parseInt(parts[parts.indexOf("consultations") + 1]);
+  
+
+
   const { body, body_ar, attachment_url } = await req.json();
   if (!body) return err("Message body required");
 
@@ -508,3 +523,4 @@ async function markNotificationRead(req, env) {
   await env.DB.prepare("UPDATE notifications SET is_read=1 WHERE id=? AND user_id=?").bind(id, u.id).run();
   return json({ ok: true });
 }
+
