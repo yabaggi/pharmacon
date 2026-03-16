@@ -51,11 +51,12 @@ export default {
     const url = new URL(req.url);
     const path = url.pathname;
 
+  
     // Serve frontend
     if (path === "/" || path === "/index.html") {
-      return env.ASSETS.fetch(req);
+      if (env.ASSETS) return env.ASSETS.fetch(req);
+      return new Response("Frontend not found. Run with wrangler dev.", { status: 404 });
     }
-
     // API routes
     try {
       // Auth
@@ -94,7 +95,11 @@ export default {
       if (path === "/api/notifications" && req.method === "GET") return getNotifications(req, env);
       if (path.startsWith("/api/notifications/") && req.method === "PUT") return markNotificationRead(req, env);
 
-      return env.ASSETS.fetch(req);
+      
+      // was: return env.ASSETS.fetch(req);
+      if (env.ASSETS) return env.ASSETS.fetch(req);
+      return new Response("Not found", { status: 404 });
+
     } catch (e) {
       return err("Internal error: " + e.message, 500);
     }

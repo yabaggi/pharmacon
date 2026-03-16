@@ -1,15 +1,11 @@
 name = "pharma-consult"
 main = "src/worker.js"
 compatibility_date = "2024-09-01"
-compatibility_flags = ["nodejs_compat"]
 
-[site]
-bucket = "./public"
+assets = { directory = "./public" }
 
 [[d1_databases]]
 binding = "DB"
 database_name = "pharma-consult-db"
 database_id = "f45af60d-fc9f-4037-8b1e-14cda343b205"
 
-[vars]
-ENVIRONMENT = "production"
