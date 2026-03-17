@@ -1,0 +1,48 @@
+If you want to extend the system next, some natural additions would be:
+
+More drugs in the database — just add INSERT rows to schema.sql and re-run wrangler d1 execute --remote
+Email notifications via Cloudflare Email Workers or Resend
+Scheduled reminders for unanswered consultations using Cloudflare Cron Triggers
+File attachments in chat using Cloudflare R2 storage
+Real-time messaging using Durable Objects instead of polling
+
+I want to extend the system next, with these additions...
+1. File/image attachments in consultation and chat using R1 only, like you did in the mosques app, automatically resize the image to be max .8mb.
+this is blobToResponse function from mosques app if it can help....
+function blobToResponse(img, maxAge = 86400) {
+  let body;
+
+  if (typeof img === 'string') {
+    // D1 local dev (some versions) returns BLOBs as base64 strings
+    const binary = atob(img);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    body = bytes.buffer;
+  } else if (img instanceof ArrayBuffer || ArrayBuffer.isView(img)) {
+    // D1 production returns ArrayBuffer
+    body = img;
+  } else if (img && typeof img === 'object' && img.type === 'Buffer' && Array.isArray(img.data)) {
+    // Some Wrangler versions return a Node Buffer-like object { type:'Buffer', data:[...] }
+    body = new Uint8Array(img.data).buffer;
+  } else if (Array.isArray(img)) {
+    // Wrangler local dev (latest) returns BLOBs as a plain number array [255,216,255,...]
+    body = new Uint8Array(img).buffer;
+  } else if (img && typeof img === 'object') {
+    // Fallback: treat any object with numeric keys as array-like
+    const values = Object.values(img);
+    if (values.length && typeof values[0] === 'number') {
+      body = new Uint8Array(values).buffer;
+    } else {
+      return null;
+    }
+  } else {
+    return null;
+  }
+2. Admin user to be able to:
+- Add/edit/delete users/pharmacists
+- Aassign/reassign pharmacist to a consultation request 
+3. Consultation:
+when adding new consultaion, 2 fields are shown for each of "Subject" and "Description", one for english text and one for arabic text, 
+show only one subject and one Description based on current language selected.
+
+4. Scheduled reminders to Admin(s) for unassigned/unanswered consultations using Cloudflare Cron Triggers
