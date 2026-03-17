@@ -69,17 +69,19 @@ export default {
       if (path.startsWith("/api/users/") && req.method === "GET") return getUser(req, env);
       if (path.startsWith("/api/users/") && req.method === "PUT") return updateUser(req, env);
 
+      // Messages
+      if (path.startsWith("/api/consultations/") && path.endsWith("/messages") && req.method === "GET") return getMessages(req, env);
+
+      if (path.startsWith("/api/consultations/") && path.endsWith("/messages") && req.method === "POST") return sendMessage(req, env);
+
+
       // Consultations
       if (path === "/api/consultations" && req.method === "GET") return listConsultations(req, env);
       if (path === "/api/consultations" && req.method === "POST") return createConsultation(req, env);
       if (path.startsWith("/api/consultations/") && req.method === "GET") return getConsultation(req, env);
       if (path.startsWith("/api/consultations/") && req.method === "PUT") return updateConsultation(req, env);
 
-      // Messages
-      if (path.startsWith("/api/consultations/") && path.endsWith("/messages") && req.method === "GET") return getMessages(req, env);
-
-      if (path.startsWith("/api/consultations/") && path.endsWith("/messages") && req.method === "POST") return sendMessage(req, env);
-
+  
       // Drug search
       if (path === "/api/drugs" && req.method === "GET") return searchDrugs(req, env);
 
@@ -320,22 +322,20 @@ async function updateConsultation(req, env) {
 // MESSAGES
 // ============================================================
 
-
-
 async function getMessages(req, env) {
   const u = authUser(req);
   if (!u) return err("Unauthorized", 401);
-  
-  // Extract ID from /api/consultations/123/messages
-  const parts = req.url.split("/");
+
+  const parts = new URL(req.url).pathname.split("/");
   const id = parseInt(parts[parts.indexOf("consultations") + 1]);
-  
+
   const { results } = await env.DB.prepare(
     `SELECT m.*, u.name as sender_name, u.name_ar as sender_name_ar, u.role as sender_role
      FROM messages m LEFT JOIN users u ON m.sender_id=u.id
      WHERE m.consultation_id=? ORDER BY m.created_at ASC`
   ).bind(id).all();
-  return json(results);
+
+  return json(results ?? []);
 }
 
 

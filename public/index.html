@@ -1173,11 +1173,16 @@ function consultCardHtml(c) {
 // ============================================================
 // CONSULTATION DETAIL
 // ============================================================
+
+
 async function renderConsultDetail(el, params) {
-  const [consult, msgs] = await Promise.all([
+  const [consult, msgsData] = await Promise.all([
     api('GET', `/consultations/${params.id}`),
     api('GET', `/consultations/${params.id}/messages`),
   ]);
+  
+  // Handle both array and {results:[]} responses
+  const msgs = Array.isArray(msgsData) ? msgsData : (msgsData.results || []);
 
   const isPharm = ['community_pharmacist','volunteer_pharmacist','admin'].includes(S.user.role);
   const isPatient = S.user.role === 'patient';
@@ -1289,14 +1294,53 @@ async function renderPatientSummaryCard(patientId) {
   } catch { return ''; }
 }
 
+
 async function sendMsg(consultId) {
   const input = document.getElementById('msg-input');
   const body = input.value.trim();
   if (!body) return;
   input.value = '';
-  await api('POST', `/consultations/${consultId}/messages`, { body });
-  navigate('consult-detail', { id: consultId });
+
+  try {
+    await api('POST', `/consultations/${consultId}/messages`, { body });
+
+    // Reload messages without full page reload
+  
+    const msgsData = await api('GET', `/consultations/${consultId}/messages`);
+    console.log('messages response:', JSON.stringify(msgsData)); 
+
+    const msgs = Array.isArray(msgsData) ? msgsData : (msgsData.results || []);
+    console.log('msgs array:', msgs.length); 
+
+    const chatEl = document.getElementById('chat-msgs');
+    if (chatEl) {
+      chatEl.innerHTML = msgs.map(m => {
+        const isMine = m.sender_id === S.user.id;
+        const isPh   = m.sender_role !== 'patient';
+        const isPatient = S.user.role === 'patient';
+        const cls    = isMine ? (isPatient ? 'msg-patient' : 'msg-pharmacist') : (isPh ? 'msg-pharmacist' : 'msg-patient');
+        const avCls  = isPh ? 'msg-avatar-ph' : 'msg-avatar-p';
+        const init   = (m.sender_name||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+        const body   = S.lang === 'ar' && m.body_ar ? m.body_ar : m.body;
+        return `<div class="msg ${cls}">
+          <div class="msg-avatar ${avCls}">${init}</div>
+          <div>
+            <div class="msg-bubble">${escHtml(body)}</div>
+            <span class="msg-time">${fmtTime(m.created_at)}</span>
+          </div>
+        </div>`;
+      }).join('') || `<div class="msg msg-system"><div class="msg-bubble">No messages yet</div></div>`;
+
+      // Scroll to bottom
+      chatEl.scrollTop = chatEl.scrollHeight;
+    }
+  } catch(e) {
+    alert('Failed to send message: ' + e.message);
+  }
 }
+
+
+
 
 function handleMsgKey(e, id) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(id); }
