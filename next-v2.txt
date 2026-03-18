@@ -1,12 +1,6 @@
-If you want to extend the system next, some natural additions would be:
 
-More drugs in the database — just add INSERT rows to schema.sql and re-run wrangler d1 execute --remote
-Email notifications via Cloudflare Email Workers or Resend
-Scheduled reminders for unanswered consultations using Cloudflare Cron Triggers
-File attachments in chat using Cloudflare R2 storage
-Real-time messaging using Durable Objects instead of polling
 
-I want to extend the system next, with these additions...
+I want to extend the system next, here are 4 additions but we can start with the first 2 for now
 1. File/image attachments in consultation and chat using R1 only, like you did in the mosques app, automatically resize the image to be max .8mb.
 this is blobToResponse function from mosques app if it can help....
 function blobToResponse(img, maxAge = 86400) {

@@ -355,6 +355,26 @@ tbody tr:hover { background: var(--teal-light); }
 }
 .chat-input-bar textarea:focus { border-color: var(--teal); }
 
+/* ── Image attachment ── */
+.attach-btn { position: relative; }
+.attach-btn input[type=file] { position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; }
+.img-preview-wrap { padding: 8px 20px 0; display:flex; gap:8px; flex-wrap:wrap; }
+.img-preview { position:relative; display:inline-block; }
+.img-preview img { width:72px; height:72px; object-fit:cover; border-radius:8px; border:2px solid var(--teal-mid); }
+.img-preview .remove-img { position:absolute; top:-6px; right:-6px; background:var(--red); color:#fff; border:none; border-radius:50%; width:18px; height:18px; font-size:.7rem; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+.msg-img { max-width:220px; border-radius:10px; cursor:pointer; display:block; margin-top:6px; border:2px solid rgba(255,255,255,.3); }
+.msg-img:hover { opacity:.9; }
+
+/* ── Admin user management ── */
+.user-action-bar { display:flex; gap:8px; margin-bottom:16px; flex-wrap:wrap; align-items:center; }
+.status-dot { width:8px; height:8px; border-radius:50%; display:inline-block; margin-right:5px; }
+.status-dot.active   { background:var(--green); }
+.status-dot.inactive { background:var(--red); }
+
+/* ── Assign dropdown in consultation ── */
+.assign-bar { padding:12px 20px; background:var(--amber-light); border-top:1px solid var(--border); display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+.assign-bar select { flex:1; min-width:180px; }
+
 /* ── DRUG SEARCH ── */
 .drug-card {
   background: var(--white); border: 1px solid var(--border); border-radius: var(--radius);
@@ -1173,16 +1193,11 @@ function consultCardHtml(c) {
 // ============================================================
 // CONSULTATION DETAIL
 // ============================================================
-
-
 async function renderConsultDetail(el, params) {
-  const [consult, msgsData] = await Promise.all([
+  const [consult, msgs] = await Promise.all([
     api('GET', `/consultations/${params.id}`),
     api('GET', `/consultations/${params.id}/messages`),
   ]);
-  
-  // Handle both array and {results:[]} responses
-  const msgs = Array.isArray(msgsData) ? msgsData : (msgsData.results || []);
 
   const isPharm = ['community_pharmacist','volunteer_pharmacist','admin'].includes(S.user.role);
   const isPatient = S.user.role === 'patient';
@@ -1200,11 +1215,14 @@ async function renderConsultDetail(el, params) {
     const cls    = isMine ? (isPatient ? 'msg-patient' : 'msg-pharmacist') : (isPh ? 'msg-pharmacist' : 'msg-patient');
     const avCls  = isPh ? 'msg-avatar-ph' : 'msg-avatar-p';
     const init   = (m.sender_name||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-    const body   = S.lang === 'ar' && m.body_ar ? m.body_ar : m.body;
+    const bodyText = S.lang === 'ar' && m.body_ar ? m.body_ar : (m.body || '');
+    const imgHtml  = m.attachment_url
+      ? `<img src="${m.attachment_url}" class="msg-img" onclick="openImageModal('${m.attachment_url}')" alt="attachment"/>`
+      : '';
     return `<div class="msg ${cls}">
       <div class="msg-avatar ${avCls}">${init}</div>
       <div>
-        <div class="msg-bubble">${escHtml(body)}</div>
+        <div class="msg-bubble">${bodyText ? escHtml(bodyText) : ''}${imgHtml}</div>
         <span class="msg-time">${fmtTime(m.created_at)}</span>
       </div>
     </div>`;
@@ -1234,6 +1252,7 @@ async function renderConsultDetail(el, params) {
         <span class="badge badge-${consult.priority}">${t(consult.priority)}</span>
         ${canAssign ? `<button class="btn btn-sm btn-primary" onclick="assignConsult(${consult.id})">🤝 ${t('assign_me')}</button>` : ''}
         ${canResolve ? `<button class="btn btn-sm btn-outline" onclick="resolveConsult(${consult.id})">✅ ${t('resolve')}</button>` : ''}
+        ${S.user.role === 'admin' ? `<button class="btn btn-sm btn-secondary" onclick="showAssignModal(${consult.id},${consult.pharmacist_id||'null'})">👤 Assign/Reassign</button>` : ''}
       </div>
 
       <div class="detail-grid">
@@ -1247,7 +1266,12 @@ async function renderConsultDetail(el, params) {
           ${existingRatingHtml}
           ${ratingHtml}
           ${consult.status !== 'closed' && consult.status !== 'resolved' ? `
+          <div id="img-previews" class="img-preview-wrap"></div>
           <div class="chat-input-bar">
+            <button class="btn btn-icon attach-btn" title="Attach image / إرفاق صورة">
+              📎
+              <input type="file" accept="image/*" capture="environment" onchange="handleImageAttach(event,${consult.id})"/>
+            </button>
             <textarea id="msg-input" rows="2" placeholder="${t('type_message')}" onkeydown="handleMsgKey(event,${consult.id})"></textarea>
             <button class="btn btn-primary" onclick="sendMsg(${consult.id})">📤 ${t('send')}</button>
           </div>` : ''}
@@ -1294,53 +1318,177 @@ async function renderPatientSummaryCard(patientId) {
   } catch { return ''; }
 }
 
-
 async function sendMsg(consultId) {
   const input = document.getElementById('msg-input');
-  const body = input.value.trim();
-  if (!body) return;
+  const body  = input.value.trim();
+  if (!body && !_pendingAttachmentId) return;
   input.value = '';
-
+  const attachId = _pendingAttachmentId;
+  _pendingAttachmentId = null;
+  clearAttachment();
   try {
-    await api('POST', `/consultations/${consultId}/messages`, { body });
+    await api('POST', `/consultations/${consultId}/messages`, {
+      body:            body || null,
+      attachment_id:   attachId || null,
+      attachment_type: attachId ? 'image' : null,
+    });
+    await refreshChat(consultId);
+  } catch(e) { alert('Failed to send: ' + e.message); }
+}
 
-    // Reload messages without full page reload
-  
-    const msgsData = await api('GET', `/consultations/${consultId}/messages`);
-    console.log('messages response:', JSON.stringify(msgsData)); 
+// ── Image attachment — compress then upload to D1 via /api/upload ──
+let _pendingAttachmentId = null;
 
-    const msgs = Array.isArray(msgsData) ? msgsData : (msgsData.results || []);
-    console.log('msgs array:', msgs.length); 
+async function handleImageAttach(event, consultId) {
+  const file = event.target.files[0];
+  if (!file) return;
+  // Reset file input so same file can be re-selected
+  event.target.value = '';
 
-    const chatEl = document.getElementById('chat-msgs');
-    if (chatEl) {
-      chatEl.innerHTML = msgs.map(m => {
-        const isMine = m.sender_id === S.user.id;
-        const isPh   = m.sender_role !== 'patient';
-        const isPatient = S.user.role === 'patient';
-        const cls    = isMine ? (isPatient ? 'msg-patient' : 'msg-pharmacist') : (isPh ? 'msg-pharmacist' : 'msg-patient');
-        const avCls  = isPh ? 'msg-avatar-ph' : 'msg-avatar-p';
-        const init   = (m.sender_name||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
-        const body   = S.lang === 'ar' && m.body_ar ? m.body_ar : m.body;
-        return `<div class="msg ${cls}">
-          <div class="msg-avatar ${avCls}">${init}</div>
-          <div>
-            <div class="msg-bubble">${escHtml(body)}</div>
-            <span class="msg-time">${fmtTime(m.created_at)}</span>
-          </div>
-        </div>`;
-      }).join('') || `<div class="msg msg-system"><div class="msg-bubble">No messages yet</div></div>`;
-
-      // Scroll to bottom
-      chatEl.scrollTop = chatEl.scrollHeight;
+  const compressed = await compressImage(file, 800 * 1024);
+  const previewUrl = URL.createObjectURL(compressed);
+  const preview = document.getElementById('img-previews');
+  if (preview) {
+    preview.innerHTML = `
+      <div class="img-preview">
+        <img src="${previewUrl}" alt="preview"/>
+        <button class="remove-img" onclick="clearAttachment()">✕</button>
+      </div>
+      <span style="font-size:.75rem;color:var(--ink-faint);align-self:center">
+        ${(compressed.size/1024).toFixed(0)}KB — uploading…
+      </span>`;
+  }
+  try {
+    const formData = new FormData();
+    formData.append('file', compressed, 'image.jpg');
+    const res = await fetch('/api/upload', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + S.token },
+      body: formData,
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Upload failed');
+    _pendingAttachmentId = data.id;  // Store D1 attachment ID
+    if (preview) {
+      const span = preview.querySelector('span');
+      if (span) span.textContent = `${(compressed.size/1024).toFixed(0)}KB ✓ ready to send`;
     }
   } catch(e) {
-    alert('Failed to send message: ' + e.message);
+    clearAttachment();
+    alert('Upload failed: ' + e.message);
   }
 }
 
+function clearAttachment() {
+  _pendingAttachmentId = null;
+  const p = document.getElementById('img-previews');
+  if (p) p.innerHTML = '';
+}
 
+// Canvas binary-search compression — returns a Blob under maxBytes
+async function compressImage(file, maxBytes) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      let w = img.width, h = img.height;
+      const MAX_DIM = 1600;
+      if (w > MAX_DIM || h > MAX_DIM) {
+        if (w > h) { h = Math.round(h * MAX_DIM / w); w = MAX_DIM; }
+        else        { w = Math.round(w * MAX_DIM / h); h = MAX_DIM; }
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w; canvas.height = h;
+      canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+      let lo = 0.1, hi = 0.92, best = null;
+      (async () => {
+        for (let i = 0; i < 6; i++) {
+          const mid = (lo + hi) / 2;
+          const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', mid));
+          if (blob && blob.size <= maxBytes) { best = blob; lo = mid; }
+          else { hi = mid; }
+        }
+        if (!best) best = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.5));
+        resolve(best);
+      })();
+    };
+    img.src = url;
+  });
+}
 
+function buildMsgHtml(m) {
+  const isPatient = S.user.role === 'patient';
+  const isMine    = m.sender_id === S.user.id;
+  const isPh      = m.sender_role !== 'patient';
+  const cls       = isMine ? (isPatient ? 'msg-patient' : 'msg-pharmacist') : (isPh ? 'msg-pharmacist' : 'msg-patient');
+  const avCls     = isPh ? 'msg-avatar-ph' : 'msg-avatar-p';
+  const init      = (m.sender_name||'?').split(' ').map(w=>w[0]).join('').toUpperCase().slice(0,2);
+  const bodyText  = S.lang === 'ar' && m.body_ar ? m.body_ar : (m.body || '');
+  const imgHtml   = m.attachment_url
+    ? `<img src="${m.attachment_url}" class="msg-img" onclick="openImageModal('${m.attachment_url}')" alt="image"/>`
+    : '';
+  return `<div class="msg ${cls}">
+    <div class="msg-avatar ${avCls}">${init}</div>
+    <div>
+      <div class="msg-bubble">${bodyText ? escHtml(bodyText) : ''}${imgHtml}</div>
+      <span class="msg-time">${fmtTime(m.created_at)}</span>
+    </div>
+  </div>`;
+}
+
+async function refreshChat(consultId) {
+  const msgsData = await api('GET', `/consultations/${consultId}/messages`);
+  const msgs = Array.isArray(msgsData) ? msgsData : (msgsData.results || []);
+  const chatEl = document.getElementById('chat-msgs');
+  if (!chatEl) return;
+  chatEl.innerHTML = msgs.map(buildMsgHtml).join('') ||
+    `<div class="msg msg-system"><div class="msg-bubble">No messages yet / لا توجد رسائل بعد</div></div>`;
+  chatEl.scrollTop = chatEl.scrollHeight;
+}
+
+function openImageModal(url) {
+  const ov = document.createElement('div');
+  ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:9999;display:flex;align-items:center;justify-content:center;cursor:zoom-out';
+  ov.onclick = () => ov.remove();
+  ov.innerHTML = `<img src="${url}" style="max-width:95vw;max-height:95vh;border-radius:8px;box-shadow:0 0 60px rgba(0,0,0,.5)"/>`;
+  document.body.appendChild(ov);
+}
+
+// ── Admin assign/reassign ──
+async function showAssignModal(consultId, currentPharmId) {
+  const pharmacists = await api('GET', '/pharmacists');
+  const options = pharmacists.map(p => {
+    const name = S.lang === 'ar' && p.name_ar ? p.name_ar : p.name;
+    const type = p.role === 'community_pharmacist' ? 'CP' : 'VP';
+    return `<option value="${p.id}" ${p.id == currentPharmId ? 'selected' : ''}>${escHtml(name)} (${type})</option>`;
+  }).join('');
+  openModal('Assign / Reassign Pharmacist', `
+    <div class="form-group">
+      <label class="form-label">Select Pharmacist / اختر صيدلانياً</label>
+      <select class="form-select" id="assign-pharm-select">
+        <option value="">— Unassign / إلغاء التعيين —</option>
+        ${options}
+      </select>
+    </div>
+    <p style="font-size:.82rem;color:var(--ink-faint);margin-top:4px">
+      Current / الحالي: ${currentPharmId ? '#' + currentPharmId : 'Unassigned / غير معيّن'}
+    </p>
+  `, [
+    { label: t('cancel'), cls: 'btn-secondary', action: 'closeModal()' },
+    { label: 'Assign / تعيين', cls: 'btn-primary', action: `doAssignPharmacist(${consultId})` },
+  ]);
+}
+
+async function doAssignPharmacist(consultId) {
+  const sel = document.getElementById('assign-pharm-select');
+  const pharmId = sel.value ? parseInt(sel.value) : null;
+  try {
+    await api('PUT', `/consultations/${consultId}`, { pharmacist_id: pharmId });
+    closeModal();
+    navigate('consult-detail', { id: consultId });
+  } catch(e) { alert(e.message); }
+}
 
 function handleMsgKey(e, id) {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMsg(id); }
@@ -1381,14 +1529,15 @@ async function submitRating(id) {
 // ============================================================
 function showNewConsultModal() {
   const categories = ['general','drug_interaction','side_effects','dosage','allergy','chronic'];
+  const isAr = S.lang === 'ar';
+  const subjectPlaceholder = isAr ? 'موضوع مختصر…' : 'Brief subject…';
+  const descPlaceholder    = isAr ? 'اشرح سؤالك بالتفصيل…' : 'Describe your question in detail…';
+  const drugPlaceholder    = isAr ? 'مثال: ميتفورمين، أموكسيسيلين' : 'e.g. Metformin, Amoxicillin';
+
   openModal(t('new_consultation'), `
     <div class="form-group">
       <label class="form-label">${t('subject')}</label>
-      <input class="form-input" id="nc-subject" placeholder="Brief subject…"/>
-    </div>
-    <div class="form-group">
-      <label class="form-label">${t('subject')} (عربي)</label>
-      <input class="form-input" id="nc-subject-ar" dir="rtl" placeholder="موضوع مختصر…"/>
+      <input class="form-input" id="nc-subject" dir="${isAr?'rtl':'ltr'}" placeholder="${subjectPlaceholder}"/>
     </div>
     <div class="form-row">
       <div class="form-group">
@@ -1409,15 +1558,11 @@ function showNewConsultModal() {
     </div>
     <div class="form-group">
       <label class="form-label">${t('drug_names')}</label>
-      <input class="form-input" id="nc-drugs" placeholder="e.g. Metformin, Amoxicillin"/>
+      <input class="form-input" id="nc-drugs" dir="${isAr?'rtl':'ltr'}" placeholder="${drugPlaceholder}"/>
     </div>
     <div class="form-group">
       <label class="form-label">${t('description')}</label>
-      <textarea class="form-textarea" id="nc-desc" rows="4" placeholder="Describe your question in detail…"></textarea>
-    </div>
-    <div class="form-group">
-      <label class="form-label">${t('description')} (عربي)</label>
-      <textarea class="form-textarea" id="nc-desc-ar" rows="3" dir="rtl" placeholder="اشرح سؤالك بالتفصيل…"></textarea>
+      <textarea class="form-textarea" id="nc-desc" rows="4" dir="${isAr?'rtl':'ltr'}" placeholder="${descPlaceholder}"></textarea>
     </div>
   `, [
     { label: t('cancel'), cls: 'btn-secondary', action: 'closeModal()' },
@@ -1428,15 +1573,18 @@ function showNewConsultModal() {
 async function submitNewConsult() {
   const btn = document.querySelector('#modal-footer .btn-primary');
   if (btn) btn.classList.add('btn-loading');
+  const isAr = S.lang === 'ar';
+  const subjectVal = document.getElementById('nc-subject').value;
+  const descVal    = document.getElementById('nc-desc').value;
   try {
     const c = await api('POST', '/consultations', {
-      subject: document.getElementById('nc-subject').value,
-      subject_ar: document.getElementById('nc-subject-ar').value,
-      description: document.getElementById('nc-desc').value,
-      description_ar: document.getElementById('nc-desc-ar').value,
-      priority: document.getElementById('nc-priority').value,
-      category: document.getElementById('nc-category').value,
-      drug_names: document.getElementById('nc-drugs').value,
+      subject:        isAr ? '' : subjectVal,
+      subject_ar:     isAr ? subjectVal : '',
+      description:    isAr ? '' : descVal,
+      description_ar: isAr ? descVal : '',
+      priority:       document.getElementById('nc-priority').value,
+      category:       document.getElementById('nc-category').value,
+      drug_names:     document.getElementById('nc-drugs').value,
     });
     closeModal();
     navigate('consult-detail', { id: c.id });
@@ -1635,7 +1783,7 @@ async function renderAnalytics(el) {
 }
 
 // ============================================================
-// USERS (ADMIN)
+// USERS (ADMIN — full CRUD)
 // ============================================================
 async function renderUsers(el) {
   const users = await api('GET', '/users');
@@ -1645,27 +1793,171 @@ async function renderUsers(el) {
   };
   el.innerHTML = `
     <div class="page">
-      <div class="page-header"><h2>${t('users')}</h2></div>
+      <div class="page-header">
+        <h2>${t('users')}</h2>
+        <button class="btn btn-primary" onclick="showCreateUserModal()">＋ Add User / إضافة مستخدم</button>
+      </div>
       <div class="card">
         <div class="table-wrap">
           <table>
-            <thead><tr><th>${t('full_name')}</th><th>Email</th><th>${t('role')}</th><th>License</th><th>Status</th><th>Joined</th></tr></thead>
+            <thead><tr>
+              <th>${t('full_name')}</th>
+              <th>Email</th>
+              <th>${t('role')}</th>
+              <th>License</th>
+              <th>Status</th>
+              <th>Joined</th>
+              <th>Actions</th>
+            </tr></thead>
             <tbody>
-              ${users.map(u=>`
+              ${users.map(u => `
                 <tr>
-                  <td><strong>${escHtml(u.name)}</strong>${u.name_ar?`<br/><span class="text-sm text-muted">${escHtml(u.name_ar)}</span>`:''}
+                  <td>
+                    <strong>${escHtml(u.name)}</strong>
+                    ${u.name_ar ? `<br/><span class="text-sm text-muted">${escHtml(u.name_ar)}</span>` : ''}
                   </td>
-                  <td class="text-sm">${u.email}</td>
+                  <td class="text-sm">${escHtml(u.email)}</td>
                   <td>${roleBadge(u.role)}</td>
-                  <td class="text-sm text-muted">${u.license_number||'—'}</td>
-                  <td><span class="badge ${u.is_active?'badge-resolved':'badge-closed'}">${u.is_active?'Active':'Suspended'}</span></td>
+                  <td class="text-sm text-muted">${u.license_number || '—'}</td>
+                  <td>
+                    <span class="status-dot ${u.is_active ? 'active' : 'inactive'}"></span>
+                    <span style="font-size:.82rem">${u.is_active ? 'Active' : 'Suspended'}</span>
+                  </td>
                   <td class="text-sm text-muted">${fmtDate(u.created_at)}</td>
+                  <td>
+                    <div style="display:flex;gap:6px">
+                      <button class="btn btn-sm btn-secondary" onclick="showEditUserModal(${u.id})">✏️</button>
+                      <button class="btn btn-sm ${u.is_active ? 'btn-danger' : 'btn-outline'}"
+                        onclick="toggleUserStatus(${u.id}, ${u.is_active ? 0 : 1})">
+                        ${u.is_active ? '🚫' : '✅'}
+                      </button>
+                    </div>
+                  </td>
                 </tr>`).join('')}
             </tbody>
           </table>
         </div>
       </div>
     </div>`;
+}
+
+function userFormHtml(u) {
+  const isEdit = !!u;
+  return `
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">${t('full_name')}</label>
+        <input class="form-input" id="uf-name" value="${escHtml(u?.name||'')}"/>
+      </div>
+      <div class="form-group">
+        <label class="form-label">${t('name_ar')}</label>
+        <input class="form-input" id="uf-name-ar" dir="rtl" value="${escHtml(u?.name_ar||'')}"/>
+      </div>
+    </div>
+    <div class="form-group">
+      <label class="form-label">${t('email')}</label>
+      <input class="form-input" id="uf-email" type="email" value="${escHtml(u?.email||'')}" ${isEdit?'readonly':''}/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">${isEdit ? 'New Password (leave blank to keep)' : t('password')}</label>
+      <input class="form-input" id="uf-pw" type="password" placeholder="${isEdit?'Leave blank to keep current':''}"/>
+    </div>
+    <div class="form-row">
+      <div class="form-group">
+        <label class="form-label">${t('role')}</label>
+        <select class="form-select" id="uf-role" onchange="toggleUfLicense()">
+          <option value="patient"              ${u?.role==='patient'?'selected':''}>Patient / مريض</option>
+          <option value="community_pharmacist" ${u?.role==='community_pharmacist'?'selected':''}>Community Pharmacist</option>
+          <option value="volunteer_pharmacist" ${u?.role==='volunteer_pharmacist'?'selected':''}>Volunteer Pharmacist</option>
+          <option value="admin"               ${u?.role==='admin'?'selected':''}>Admin</option>
+        </select>
+      </div>
+      <div class="form-group">
+        <label class="form-label">${t('phone')}</label>
+        <input class="form-input" id="uf-phone" value="${escHtml(u?.phone||'')}"/>
+      </div>
+    </div>
+    <div class="form-group" id="uf-license-group" style="${(!u||u.role!=='patient')?'':'display:none'}">
+      <label class="form-label">${t('license')}</label>
+      <input class="form-input" id="uf-license" value="${escHtml(u?.license_number||'')}"/>
+    </div>
+    <div class="form-group">
+      <label class="form-label">Specialty / التخصص</label>
+      <input class="form-input" id="uf-specialty" value="${escHtml(u?.specialty||'')}"/>
+    </div>`;
+}
+
+function toggleUfLicense() {
+  const role = document.getElementById('uf-role')?.value;
+  const grp  = document.getElementById('uf-license-group');
+  if (grp) grp.style.display = role === 'patient' ? 'none' : '';
+}
+
+function showCreateUserModal() {
+  openModal('Add New User / إضافة مستخدم جديد', userFormHtml(null), [
+    { label: t('cancel'), cls: 'btn-secondary', action: 'closeModal()' },
+    { label: 'Create / إنشاء', cls: 'btn-primary', action: 'submitCreateUser()' },
+  ]);
+}
+
+async function showEditUserModal(id) {
+  const u = await api('GET', `/users/${id}`);
+  openModal('Edit User / تعديل مستخدم', userFormHtml(u), [
+    { label: t('cancel'), cls: 'btn-secondary', action: 'closeModal()' },
+    { label: t('save'), cls: 'btn-primary', action: `submitEditUser(${id})` },
+  ]);
+}
+
+async function submitCreateUser() {
+  const btn = document.querySelector('#modal-footer .btn-primary');
+  if (btn) btn.classList.add('btn-loading');
+  try {
+    await api('POST', '/users', {
+      name:           document.getElementById('uf-name').value,
+      name_ar:        document.getElementById('uf-name-ar').value || null,
+      email:          document.getElementById('uf-email').value,
+      password:       document.getElementById('uf-pw').value,
+      role:           document.getElementById('uf-role').value,
+      phone:          document.getElementById('uf-phone').value || null,
+      license_number: document.getElementById('uf-license')?.value || null,
+      specialty:      document.getElementById('uf-specialty').value || null,
+    });
+    closeModal();
+    navigate('users');
+  } catch(e) {
+    alert(e.message);
+    if (btn) btn.classList.remove('btn-loading');
+  }
+}
+
+async function submitEditUser(id) {
+  const btn = document.querySelector('#modal-footer .btn-primary');
+  if (btn) btn.classList.add('btn-loading');
+  const body = {
+    name:           document.getElementById('uf-name').value,
+    name_ar:        document.getElementById('uf-name-ar').value || null,
+    role:           document.getElementById('uf-role').value,
+    phone:          document.getElementById('uf-phone').value || null,
+    license_number: document.getElementById('uf-license')?.value || null,
+    specialty:      document.getElementById('uf-specialty').value || null,
+  };
+  const pw = document.getElementById('uf-pw').value;
+  if (pw) body.password = pw;
+  try {
+    await api('PUT', `/users/${id}`, body);
+    closeModal();
+    navigate('users');
+  } catch(e) {
+    alert(e.message);
+    if (btn) btn.classList.remove('btn-loading');
+  }
+}
+
+async function toggleUserStatus(id, newStatus) {
+  const action = newStatus ? 'activate' : 'suspend';
+  if (!confirm(`${action} this user?`)) return;
+  await api('PUT', `/users/${id}`, { is_active: !!newStatus });
+  navigate('users');
 }
 
 // ============================================================
